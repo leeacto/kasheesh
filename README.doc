@@ -3,4 +3,10 @@
 * Python v3.8
 2. Run `python3 -m venv .venv` to create virtual environment
 3. Run `. .venv/bin/activate` to activate environment
-4. Run `flask --app api run` to run local server at http://127.0.0.1:5000
+4. Run `flask run` to run local server at http://127.0.0.1:5000
+
+# API
+1. `/users/:id/transactions` returns all Payments and Returns for a given User ID in whole USD
+2. `/merchant-type-codes/:id/net-purchases` returns daily net purchases (Payments less Returns) for a given Merchant Type Code
+  a. Days without activity are omitted
+  b. Days where Net Purchases are under $1 are omitted
