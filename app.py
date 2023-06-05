@@ -1,12 +1,10 @@
-from IPython import embed
 from collections import defaultdict
 import csv
 from datetime import datetime
-import json
 
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import func, Date
+from sqlalchemy import func
 
 # create the extension
 db = SQLAlchemy()
@@ -51,6 +49,7 @@ class Return(db.Model):
         return self.datetime.isoformat()
 
 
+@app.cli.command('seed')
 def seed_db():
     with open("combined_transactions.csv") as f:
         print("SEEDING")
@@ -65,42 +64,54 @@ def seed_db():
                                  amount_cents=row['amount_cents'],
                                  datetime=dt))
             elif row['transaction_type'] == RETURN:
-                db.session.add(
-                        Return(user_id=row['user_id'],
-                                 merchant_type_code=row['merchant_type_code'],
-                                 amount_cents=row['amount_cents'] * -1,
-                                 datetime=dt))
+                return_rec = Return(user_id=row['user_id'],
+                                    merchant_type_code=row['merchant_type_code'],
+                                    amount_cents=int(row['amount_cents']) * -1,
+                                    datetime=dt)
+                db.session.add(return_rec)
             else:
                 print(f"Unknown Transaction Type: {row['transaction_type']}")
         db.session.commit()
 
 with app.app_context():
     db.create_all()
-    # seed_db()
 
 
-@app.route("/users/<int:id>/transactions")
-def user_transactions(id):
-    pq = Purchase.query.filter(Purchase.user_id==id).all()
-    rq = Return.query.filter(Return.user_id==id).all()
+def transactions_by_user(user_id):
+    purchases = Purchase.query.filter(Purchase.user_id==user_id).all()
+    returns = Return.query.filter(Return.user_id==user_id).all()
     return [{
             "type": PURCHASE if isinstance(t, Purchase) else RETURN,
             "user_id": t.user_id, 
             "merchant_type_code": t.merchant_type_code,
-            "amount_in_dollars": t.amount_cents // 100,
+            "amount_in_dollars": int(t.amount_cents // 100),
             "datetime": t.iso_date_str}
-            for t in pq + rq]
+            for t in purchases + returns]
+
+
+def merchant_type_net_purchases(merchant_type_code):
+    purchases = (Purchase.query.with_entities(func.DATE(Purchase.datetime), func.sum(Purchase.amount_cents))
+                         .filter(Purchase.merchant_type_code==merchant_type_code)
+                         .group_by(func.DATE(Purchase.datetime))
+                         .all())
+    returns = (Return.query.with_entities(func.DATE(Return.datetime), func.sum(Return.amount_cents))
+                     .filter(Return.merchant_type_code==merchant_type_code)
+                     .group_by(func.DATE(Return.datetime))
+                     .all())
+    transactions = purchases + returns
+    transactions_dict = defaultdict(int)
+    for date, amt in transactions:
+        transactions_dict[date] += amt
+
+    return [{"merchant_type_code": merchant_type_code, "net_amount_in_dollars": int(amt // 100), "date": date}
+            for date, amt in transactions_dict.items()]
+
+
+@app.route("/users/<int:id>/transactions")
+def user_transactions(id):
+    return transactions_by_user(id)
 
 
 @app.route("/merchant-type-codes/<int:id>/net-purchases")
 def net_purchases(id):
-    # select sum(amount_cents), merchant_type_code, date(datetime) from purchases group by  merchant_type_code, date(datetime
-    pq = Purchase.query.with_entities(func.DATE(Purchase.datetime), func.sum(Purchase.amount_cents)).filter(Purchase.merchant_type_code==id).group_by(func.DATE(Purchase.datetime)).all()
-    rq = Return.query.with_entities(func.DATE(Return.datetime), func.sum(Return.amount_cents)).filter(Return.merchant_type_code==id).group_by(func.DATE(Return.datetime)).all()
-    t = pq + rq
-    d = defaultdict(int)
-    for x in t:
-        d[x[0]] += x[1]
-
-    return [{"merchant_type_code": id, "net_amount_in_dollars": amt // 100, "date": date}
-            for date, amt in d.items() if amt // 100 != 0]
+    return merchant_type_net_purchases(id)
